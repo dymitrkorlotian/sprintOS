@@ -28,15 +28,15 @@ Prices per million tokens, from the [pricing page](https://platform.claude.com/d
 
 | Model | Input | Output | Cache read | 5-min cache write | Batch (in/out) | Context |
 |---|---|---|---|---|---|---|
-| Largest Claude model | $4 | $20 | $0.20 (0.05×) | $5 | $2 / $10 | 1M |
+| Large Claude model | $4 | $20 | $0.20 (0.05×) | $5 | $2 / $10 | 1M |
 | Mid-size Claude model | $2 | $10 | $0.20 | $2.50 | $1 / $5 | 1M |
 | Smallest Claude model | $1 | $5 | $0.10 | $1.25 | $0.50 / $2.50 | 200K |
-| Claude Fable 5.1 (top tier) | $10 | $50 | $0.25 | $12.50 | $5 / $25 | 1M |
+| Top-tier Claude model | $10 | $50 | $0.25 | $12.50 | $5 / $25 | 1M |
 
 - **Batch API: 50% off input and output.** It stacks with caching ([pricing](https://platform.claude.com/docs/en/about-claude/pricing)). Results come back asynchronously, in any order.
-- **Prompt caching:** a 5-minute write costs 1.25× and a 1-hour write 2×. A read costs 0.1× (0.05× on the largest model). The cache is a prefix match in the order tools → system → messages, and it is isolated per workspace ([pricing](https://platform.claude.com/docs/en/about-claude/pricing); [prompt caching docs](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)).
+- **Prompt caching:** a 5-minute write costs 1.25× and a 1-hour write 2×. A read costs 0.1× (0.05× on the large model). The cache is a prefix match in the order tools → system → messages, and it is isolated per workspace ([pricing](https://platform.claude.com/docs/en/about-claude/pricing); [prompt caching docs](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)).
 - **Tokenizer:** Recent Claude models produce about 30% more tokens for the same text, so cost estimates must use `count_tokens`, not a characters ÷ 4 rule ([pricing](https://platform.claude.com/docs/en/about-claude/pricing)).
-- **Structured outputs:** `output_config.format` (JSON schema) and `strict: true` on tools guarantee schema-valid output. On the current largest and mid-size models, forced `tool_choice` (`any`/`tool`) returns a 400, so use structured outputs instead. the largest Claude model cannot turn thinking off: `effort` (low to max, default `medium`) is the only control ([migration guide](https://platform.claude.com/docs/en/about-claude/models/migration-guide)).
+- **Structured outputs:** `output_config.format` (JSON schema) and `strict: true` on tools guarantee schema-valid output. On the current large and mid-size models, forced `tool_choice` (`any`/`tool`) returns a 400, so use structured outputs instead. The large Claude model cannot turn thinking off: `effort` (low to max, default `medium`) is the only control ([migration guide](https://platform.claude.com/docs/en/about-claude/models/migration-guide)).
 - **Safety refusals:** the newest models can stop with `stop_reason: "refusal"`. The gateway must handle that, and a server-side `fallbacks` parameter (beta) can reroute the request.
 - **Usage fields** on every response: `input_tokens`, `output_tokens`, `cache_creation_input_tokens` (with a 5m/1h split), `cache_read_input_tokens` and `server_tool_use`. The ledger is built from these, not from estimates.
 - **Agent options:** the plain Messages API with your own loop, the SDK's Tool Runner (a thin loop over your tools), the **Claude Agent SDK** (the Claude Code harness as a library: built-in file and bash tools, hooks and permissions; the TypeScript package bundles a native Claude Code binary, the Python one needs the CLI; [Agent SDK docs](https://code.claude.com/docs/en/agent-sdk/typescript)), and **Managed Agents**, which run in Anthropic-hosted sessions at $0.08 per session-hour plus tokens, with no batch discount ([pricing](https://platform.claude.com/docs/en/about-claude/pricing)).
@@ -60,14 +60,14 @@ features ──▶ gateway.call(feature, input, {urgency})
 
 | Feature | Default model | Effort | Mode | Why |
 |---|---|---|---|---|
-| Sprint close summary, retro draft | the largest Claude model | medium | Batch (results within the hour are fine) | quality matters; batch halves cost |
-| Rollover / weekly plan proposal | the largest Claude model | medium | Batch, or now when the user taps **Suggest again** | reasoning over a structured plan |
+| Sprint close summary, retro draft | the large Claude model | medium | Batch (results within the hour are fine) | quality matters; batch halves cost |
+| Rollover / weekly plan proposal | the large Claude model | medium | Batch, or now when the user taps **Suggest again** | reasoning over a structured plan |
 | Triage of captured items | the smallest or mid-size Claude model | low | Batch per hour | high volume, simple |
 | Link summary | the mid-size Claude model | low | now (user-initiated) | user is waiting |
-| Ask your OS | the mid-size model (largest as an opt-in) | low/medium | now, streamed | the main cost driver |
+| Ask your OS | the mid-size model (large as an opt-in) | low/medium | now, streamed | the main cost driver |
 | Tag and kind suggestions | none (embedding vote) | – | – | already works without an LLM in Sprint R4.4a |
 
-- **Rough cost for one person** (estimates only; measure in the spike). Weekly rituals: about 40K input and 4K output tokens on the largest model in batch ≈ $0.12 a week. Ask on the mid-size Claude model, retrieval first and 1–3 tool turns: about 20–40K input (mostly cached) and 1K output ≈ $0.03–0.08 a question, so 10 questions a day ≈ $10–25 a month. **Ask is what the budget is for**, as Sprint already found ($7–10 a month with Ask in `smarter.md`).
+- **Rough cost for one person** (estimates only; measure in the spike). Weekly rituals: about 40K input and 4K output tokens on the large model in batch ≈ $0.12 a week. Ask on the mid-size Claude model, retrieval first and 1–3 tool turns: about 20–40K input (mostly cached) and 1K output ≈ $0.03–0.08 a question, so 10 questions a day ≈ $10–25 a month. **Ask is what the budget is for**, as Sprint already found ($7–10 a month with Ask in `smarter.md`).
 - **Budgets:** a monthly cap that the user sets. At 80% the app shows a notice. At 100% interactive features pause and scheduled rituals still run, up to their own small cap. A per-run cap uses `task_budget` (beta) or a turn limit in our loop. The ledger is append-only and covered by the event log's tenancy rules, like `app.ai_usage` in Sprint.
 - **Caching plan:** the system prompt and tool definitions are frozen per release and sorted deterministically. Workspace context (ontology, active sprint) goes into a second cached block. The question goes last. A check that `cache_read_input_tokens > 0` on the second call of a loop goes in CI against a fake server.
 - **Provider abstraction:** a thin interface (`complete`, `stream`, `batch`, `embed`) so that Apple's models or a local model can serve a feature. Do not build a general multi-provider layer: one real provider and one fake for tests.
