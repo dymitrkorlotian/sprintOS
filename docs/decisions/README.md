@@ -4,4 +4,4 @@ Architecture Decision Records, one per significant decision, numbered `NNNN-titl
 
 | ADR | Title | Status |
 |---|---|---|
-| 0001 | The founding architecture (local-first desktop app) | In progress |
+| [0001](0001-founding-architecture.md) | The founding architecture | Proposed |
