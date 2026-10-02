@@ -1,5 +1,7 @@
 # Benchmark: Loro vs Automerge vs Yjs
 
+> **Read with care** (red-team review, PR #1): this ran in Node (JavaScript/wasm), not natively in Rust, on a flat single-user text trace with no blocks, marks or concurrency. Loro's 14 ms load is lazy, while Yjs's 51 ms is a full decode. The page-move rows test a job the ADR gives to the reducer, not to Loro. And loro-prosemirror 0.4.4 stores blocks in a plain `LoroList`, so the movable-list advantage doesn't reach the editor through the existing binding. Spike S1b reruns this natively on a block-structured trace.
+
 Supports [ADR-0001](../decisions/0001-founding-architecture.md) → Sync. Measured 2026-10-02. Throwaway scripts; the core is at the end.
 
 ## Question

@@ -4,6 +4,8 @@ Status: research input for ADR-0001. Written 2026-10-02. All URLs accessed 2026-
 
 ## TL;DR
 
+> **Update after review:** loro-prosemirror 0.4.4 uses a plain `LoroList`, not `LoroMovableList`, so "moved *and* edited" (section 4a) needs a fork of the binding. The protocol rules that came out of the red-team review are in [`sync-protocol.md`](sync-protocol.md).
+>
 > **Update after measuring** ([`bench-crdt.md`](bench-crdt.md)): Automerge 3.5 in JavaScript took 38 s to replay one page's editing trace and 3.6 s to load it, so the fallback for page bodies is **Yjs**, not Automerge. Loro stays the pick.
 
 - **Recommendation: an event log as the source of truth, reduced by a deterministic reducer into SQLite (the queryable store). Rich-text bodies are Loro documents whose update blobs travel as payloads inside the same log.** The hub, when there is one, is just another peer: it stores and forwards encrypted events. It can be blind (E2EE) or trusted (holds the key and runs AI jobs); the user chooses.

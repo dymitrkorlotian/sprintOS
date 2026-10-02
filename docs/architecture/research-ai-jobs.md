@@ -106,7 +106,7 @@ The MIRACL and CLEF numbers for the last three are from the Arctic-Embed 2.0 pap
 
 **Throughput on Apple Silicon** (published, not ours):
 - EmbeddingGemma, MLX 8-bit on an M5 Max: ~87K tokens/s, 253 docs/s, 3.2 ms per query, 1.6 GB peak RAM. MLX is about 1.8× faster than GGUF for bulk work ([HF card, aufklarer](https://huggingface.co/aufklarer/EmbeddingGemma-300M-MLX-8bit)).
-- Qwen3-Embedding-0.6B on MLX: ~44K tokens/s ([qwen3-embeddings-mlx](https://github.com/jakedahn/qwen3-embeddings-mlx); chip not stated).
+- Qwen3-Embedding-0.6B on MLX: ~44K tokens/s ([qwen3-embeddings-mlx](https://github.com/jakedahn/qwen3-embeddings-mlx); an M2 Max at batch 32, one third-party README).
 - A personal corpus of about 5M tokens is therefore a few minutes of one-time work, and a single note embeds in milliseconds.
 
 **Runtimes:** MLX (fastest on Mac, Swift and Python bindings, Mac and iOS only); llama.cpp/GGUF (portable to the hub on Linux, Metal on Mac); ONNX Runtime with the CoreML execution provider (portable, partly on the ANE); Core ML (best on iPhone, needs conversion); candle and fastembed-rs (Rust, good for a Rust hub binary; check which models they support). The runtime follows the app language chosen in ADR-0001; GGUF and ONNX are the portable fallbacks.

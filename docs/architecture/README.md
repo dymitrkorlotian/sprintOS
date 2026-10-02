@@ -4,6 +4,7 @@ Supporting research and benchmarks for [ADR-0001](../decisions/0001-founding-arc
 
 | Note | What it covers |
 |---|---|
+| [sync-protocol.md](sync-protocol.md) | The sync contract: event identity, order, derived rituals, conflicts, versions, durability, revocation, keys, undo |
 | [domain-requirements.md](domain-requirements.md) | What Sprint's product really needs: types, relations, integrity rules, jobs, AI calls, volumes, lessons, what to port |
 | [research-shell-ui-editor.md](research-shell-ui-editor.md) | App shell, where the logic lives, UI framework, the editor judged on CRDT fit |
 | [research-storage.md](research-storage.md) | SQLite, PGlite, embedded Postgres and others; integrity, encryption at rest, schema evolution, many tenants |

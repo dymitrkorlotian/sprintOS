@@ -58,13 +58,23 @@ Latency in milliseconds, p50 / p95, 200 runs each with random parameters (vector
 
 ## What the numbers say
 
-1. **SQLite is the fastest on every query and every write**, usually by 2–10× over native Postgres and 5–20× over PGlite, mostly because it runs in-process with no round trip and no wasm. At 100k objects every interactive query (board, Home, neighbours, page tree, metrics, collections) answers in **under 2 ms at p95** once indexed correctly.
+1. **SQLite was fastest or equal on every query, but the margin over native Postgres is modest for indexed queries.** It is mostly 1.2–1.7× (board, Home, collections), 2–3× for full text, and 5–20× over PGlite; most of it is in-process calls with no round trip and no wasm. Writes at **equal durability** (SQLite `FULL` 1.25 / 7.9 ms against Postgres 1.63 / 10.7 ms, both fsyncing every commit) differ by about 1.3×; the `NORMAL` row doesn't fsync, so it isn't comparable to Postgres. Per class, at 100k objects on this VM: graph lookups under 2 ms p95 (after the fixes below), Home, board and collections under 10 ms, full text under 50 ms.
 2. **The danger in SQLite is the query planner, not the engine.** Three naive queries were 25–2,000 ms until fixed with a join order, an app-side loop, or the right index. So: every query lives in the core with a test that checks its plan (`EXPLAIN QUERY PLAN`) and a latency budget at 100k objects.
 3. **Full-text search fits the 50 ms budget, but only just, for very common words.** Ranking every match of a word found in tens of thousands of objects costs 20–40 ms. Mitigations: rank titles first (title-only FTS is tiny), a trigram index for substring-in-title search (0.4 ms p95), and bodies on Enter or as you pause.
 4. **Exact vector search over 100k × 512 floats is too slow for "as you type"** (122 ms here) but fine for "related items" in a side panel. A real heavy user has far fewer vectors: ADR-0004 estimates about 15k chunks, which is ~18 ms here. For headroom: store 256-dimension Matryoshka vectors (halves the time), and add an approximate index (sqlite-vec's DiskANN or `vec1` once stable, or HNSW in the Rust core) past ~50k chunks. A numpy matrix-vector product on the same machine took 25 ms p50 for 100k × 512, so a SIMD scan in Rust can be several times faster than sqlite-vec 0.1.9's prebuilt scan; that's a spike item.
 5. **PGlite is not a good primary store for a desktop app.** It is the slowest on everything, takes ~0.9 s to open, and **runs with `fsync=off`** (checked with `current_setting('fsync')`; see PGlite issue #1107), so an acknowledged write can be lost on a crash or power cut. Its value is Postgres compatibility, which the new architecture doesn't need.
 6. **A bundled native Postgres is fast enough but buys nothing here:** a second process to supervise, 6 s recovery after a crash, no iOS at all (apps can't spawn processes), and 2–10× slower than SQLite for this workload.
-7. **Writes are cheap**, even with `synchronous=FULL` (1.25 ms p50): the ontology's triggers (cardinality, event log, FTS sync) cost well under a millisecond.
+7. **Writes are cheap on this design**, even with `synchronous=FULL` (1.25 ms p50): the ontology's triggers (cardinality, event log, FTS sync) cost well under a millisecond. This is Sprint's trigger design with a tiny event payload; the ADR's real write path (command → signed event → reducer) and macOS `fullfsync` are measured in spike S3.
+
+**Fairness caveats (from the red-team review):**
+- **Tuning wasn't equal.** SQLite's slow queries were hand-fixed, while Postgres 16 ran untuned with default `work_mem` and got no index fixes. Unfixed, SQLite was *slower* than Postgres on the page tree (26.9 vs 0.39 ms) and the metrics query (17.6 vs 0.39 ms).
+- **The full-text word lists differ.** SQLite's common and mid words came from `fts5vocab` over all objects; Postgres's came from `ts_stat` over tasks only.
+- **"Cold" start was warm.** It was a new process on a file the load step had just written, with no cache purge.
+- **One run per engine** on a VM shared with another benchmark, so there is no variance and no p99.
+- **Postgres's write transaction** paid five awaited socket round trips.
+- **Vector search on native Postgres used pgvector 0.6.0 (443 ms)**, while Agent 6's run used 0.8.1 (31–37 ms on 125k). The gap is unexplained, so neither number is used as evidence.
+
+Spike S3 reruns this on a Mac with purged caches, equal tuning, one word list, and p50, p95, p99 and max over at least 5 runs.
 8. **Disk is dominated by vectors.** int8 (51 MB per 100k × 512) or 256-dimension float32 (103 MB) are the sensible formats; sqlite-vec 0.1.9 has no float16.
 
 ## Not measured here (spike items)
@@ -76,7 +86,7 @@ Latency in milliseconds, p50 / p95, 200 runs each with random parameters (vector
 
 ## Scripts
 
-Run with `npm i better-sqlite3 sqlite-vec @electric-sql/pglite @electric-sql/pglite-pgvector pg`, then `node sqlite.mjs load && node sqlite.mjs query && node sqlite.mjs cold`, and `ENGINE=pglite|native node pg.mjs load|query|cold`. The fixed queries (¹ ² ³) and the prefix and trigram indexes were measured with three small probe scripts that reuse these queries.
+Run with `npm i better-sqlite3 sqlite-vec @electric-sql/pglite @electric-sql/pglite-pgvector pg`, then `node sqlite.mjs load && node sqlite.mjs query && node sqlite.mjs cold`, and `ENGINE=pglite|native node pg.mjs load|query|cold`. The fixed queries (¹ ² ³) and the prefix and trigram indexes were measured with three small probe scripts, included below after the main scripts.
 
 <details><summary><code>gen.mjs</code></summary>
 
@@ -412,6 +422,83 @@ if (mode === "query") {
   console.log(JSON.stringify({ engine: ENGINE, hnsw: !!process.env.HNSW, ...out }));
   await db.close();
 }
+```
+
+</details>
+
+<details><summary><code>probe.mjs</code></summary>
+
+```js
+import Database from "better-sqlite3"; import * as vec from "sqlite-vec"; import { timeit, pick, vectors } from "./gen.mjs";
+const db = new Database("data/sprint.db"); vec.load(db); db.pragma("mmap_size = 268435456"); db.pragma("cache_size = -64000");
+const pages = db.prepare(`select id from objects where type='page'`).pluck().all();
+const ids = db.prepare(`select id from objects`).pluck().all();
+const sprints = db.prepare(`select id from objects where type='sprint'`).pluck().all();
+const tree = db.prepare(`with recursive t(id, depth) as (select @id, 0 union all select r.from_id, t.depth + 1 from t join relations r on r.to_id = t.id and r.type = 'child_of' and r.valid_to is null where t.depth < 20) select o.id, o.title, t.depth from t join objects o on o.id = t.id`);
+console.log("page_tree", await timeit(200, () => tree.all({ id: pick(pages) })));
+const tree2 = db.prepare(`with recursive t(id, depth) as (select @id, 0 union all select r.from_id, t.depth + 1 from t join relations r on r.to_id = t.id and r.type = 'child_of' and r.valid_to is null where t.depth < 20) select count(*) from t`);
+console.log("page_tree_ids_only", await timeit(200, () => tree2.all({ id: pick(pages) })));
+// 2 hops: two indexed branches per step; don't expand through hub nodes (tags, sprints, projects); cap fan-out.
+const hop2 = db.prepare(`with recursive n(id, d) as (
+   select @id, 0
+   union select x.id, n.d + 1 from n join (select from_id k, to_id id from relations where valid_to is null union all select to_id, from_id from relations where valid_to is null) x on x.k = n.id
+   where n.d < 2 and (n.d = 0 or (select type from objects where id = n.id) not in ('tag','sprint','project')))
+ select o.id, o.title, min(n.d) d from n join objects o on o.id = n.id group by o.id order by d limit 200`);
+console.log("hop2_v2", await timeit(200, () => hop2.all({ id: pick(ids) })));
+const metrics = db.prepare(`select properties ->> '$.outcome' outcome, count(*) from relations where to_id = ? and type = 'in_sprint' group by 1`);
+db.exec(`create index if not exists rel_to_all on relations (to_id, type)`);
+console.log("metrics_with_full_index", await timeit(200, () => metrics.all(pick(sprints))));
+// Vector floor without SQL: contiguous Float32Array dot products in JS, k=10.
+const n = 100000, D = 512, V = vectors(n), M = new Float32Array(n * D); V.forEach((v, i) => M.set(v, i * D));
+const Q = vectors(30);
+console.log("js_bruteforce_f32_512", await timeit(30, (i) => { const q = Q[i]; const top = []; for (let r = 0; r < n; r++) { let s = 0; const o = r * D; for (let d = 0; d < D; d++) s += M[o + d] * q[d]; if (top.length < 10 || s > top[9][0]) { top.push([s, r]); top.sort((a, b) => b[0] - a[0]); if (top.length > 10) top.pop(); } } return top; }));
+```
+
+</details>
+
+<details><summary><code>probe2.mjs</code></summary>
+
+```js
+import Database from "better-sqlite3"; import { timeit, pick } from "./gen.mjs";
+const db = new Database("data/sprint.db"); db.pragma("mmap_size = 268435456"); db.pragma("cache_size = -64000");
+const pages = db.prepare(`select id from objects where type='page'`).pluck().all();
+const ids = db.prepare(`select id from objects`).pluck().all();
+const tree = db.prepare(`with recursive t(id, depth) as (select @id, 0 union all select r.from_id, t.depth + 1 from t join relations r on r.to_id = t.id and r.type = 'child_of' and r.valid_to is null where t.depth < 20)
+  select o.id, o.title, t.depth from t cross join objects o on o.id = t.id`);
+console.log("page_tree_crossjoin", await timeit(200, () => tree.all({ id: pick(pages) })));
+// 2 hops as the app would do it: 1-hop query twice, skipping hub nodes on the second step.
+const hop1 = db.prepare(`select r.type, o.id, o.type otype, o.title from relations r cross join objects o on o.id = r.to_id where r.from_id = @id and r.valid_to is null
+                      union all select r.type, o.id, o.type, o.title from relations r cross join objects o on o.id = r.from_id where r.to_id = @id and r.valid_to is null`);
+const HUB = new Set(["tag", "sprint", "project"]);
+let sizes = [];
+console.log("hop2_app", await timeit(200, () => { const first = hop1.all({ id: pick(ids) }); const seen = new Map(first.map((r) => [r.id, r]));
+  for (const r of first) if (!HUB.has(r.otype)) for (const s of hop1.all({ id: r.id })) if (!seen.has(s.id)) seen.set(s.id, s); sizes.push(seen.size); }));
+sizes.sort((a, b) => a - b); console.log("hop2 result size p50", sizes[100], "p95", sizes[190]);
+```
+
+</details>
+
+<details><summary><code>probe3.mjs</code></summary>
+
+```js
+import Database from "better-sqlite3"; import { timeit, pick } from "./gen.mjs";
+const db = new Database("data/sprint.db"); db.pragma("mmap_size = 268435456"); db.pragma("cache_size = -64000");
+let t = performance.now();
+db.exec(`drop table if exists fts_p; create virtual table fts_p using fts5 (title, body_text, content='objects', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2', prefix='2 3');
+         insert into fts_p (fts_p) values ('rebuild');`);
+console.log("fts with prefix index build ms", Math.round(performance.now() - t));
+t = performance.now();
+db.exec(`drop table if exists fts_tri; create virtual table fts_tri using fts5 (title, content='objects', content_rowid='rowid', tokenize='trigram remove_diacritics 1'); insert into fts_tri (fts_tri) values ('rebuild');`);
+console.log("trigram title index build ms", Math.round(performance.now() - t));
+const vocab = db.prepare(`select term from objects_fts_v order by doc desc`).pluck().all(); const mid = vocab.slice(500, 1500), common = vocab.slice(0, 50);
+const q = db.prepare(`select o.id, o.title, bm25(fts_p, 5.0, 1.0) s from fts_p join objects o on o.rowid = fts_p.rowid where fts_p match ? order by s limit 20`);
+console.log("prefix3 with prefix index", await timeit(200, () => q.all(`${pick(mid).slice(0, 3)}*`)));
+console.log("common term", await timeit(200, () => q.all(pick(common))));
+// Typical search-as-you-type: every word a prefix, title-weighted, top 20 — like Sprint's search.
+console.log("2 prefix terms", await timeit(200, () => q.all(`${pick(mid).slice(0, 4)}* ${pick(mid).slice(0, 3)}*`)));
+const tri = db.prepare(`select o.id, o.title from fts_tri join objects o on o.rowid = fts_tri.rowid where fts_tri match ? limit 20`);
+console.log("trigram substring on titles", await timeit(200, () => tri.all(`"${pick(mid).slice(1, 5)}"`)));
+console.log(db.prepare(`select name, round(sum(pgsize)/1e6,1) mb from dbstat where name like 'fts_%' group by 1`).all());
 ```
 
 </details>
