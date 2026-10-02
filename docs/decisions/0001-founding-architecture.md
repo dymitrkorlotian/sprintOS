@@ -161,9 +161,19 @@ Research: [`research-sync.md`](../architecture/research-sync.md). Benchmark: [`b
 
 **Why not the others.** Server-authoritative engines need an always-on server with Postgres, which breaks "never require a server" and makes a blind hub impossible. CRDT documents as the truth make cross-object rules fragile: two devices repairing a merged state can disagree and fight. The packaged frameworks are TypeScript-only, alpha, proprietary, restrictively licensed or winding down (Instant's cloud closes in 2027, Replicache was archived, cr-sqlite upstream stalled). After 2025–2026's churn among sync startups, owning a *small* protocol reduces risk.
 
-**CRDT for page bodies: Loro 1.16** (MIT, Rust, Swift bindings, movable tree and list, shallow snapshots, time travel). Fallback: Automerge 3 (much better memory than 2.x, strong research lineage, but no movable list or tree). Yjs is the third choice (largest editor ecosystem, but its Rust port lags v14 and it has no block move).
+**CRDT for page bodies: Loro 1.16** (MIT, Rust, Swift bindings, movable tree and list, shallow snapshots, time travel). Measured on a real 260k-keystroke editing trace ([`bench-crdt.md`](../architecture/bench-crdt.md)):
 
-**What would change it:** the user accepts that a server must always be up (then PowerSync with Postgres is less to build); a mature native framework that does B appears; the spike shows replay too slow on a phone (then A for bulk data, B only for edges); Loro shows merge bugs under fuzzing that aren't fixed quickly (swap to Automerge; the log design stays).
+| | Loro 1.16 | Yjs 13.6 | Automerge 3.5 |
+|---|---|---|---|
+| Apply the trace | **1.08 s** | 2.0 s | 37.8 s |
+| Load the page / memory after load | **14 ms / +1.6 MB** | 51 ms / +3.3 MB | 3.6 s / +207 MB |
+| Size with history; shallow snapshot | 231 KB; **65 KB** | 160–311 KB, no history kept | **129 KB**; none |
+| One keystroke on the wire | 85 B | **15 B** | 93 B |
+| Concurrent page moves (X under Y while Y under X) | **valid tree** | cycle or lost pages | cycle or lost pages |
+
+Loro is fastest to load, keeps history, has shallow snapshots and is the only one with a real move. **Fallback: Yjs** (the BlockNote path in section 1): smaller payloads and faster merges, but no history and no block move. Automerge is out for the JavaScript side: 38 s to replay one page and 3.6 s to load it. No library should hold the whole graph in one document (Yjs needed 651 MB and 3.4 s to load 100k objects), which confirms the graph belongs in SQLite and only bodies in CRDTs. Two lessons for the build: free Loro handles created in loops (each holds ~7 KB until freed), and after a long offline period send a snapshot or one combined update rather than thousands of small ones.
+
+**What would change it:** the user accepts that a server must always be up (then PowerSync with Postgres is less to build); a mature native framework that does B appears; the spike shows replay too slow on a phone (then A for bulk data, B only for edges); Loro shows merge bugs under fuzzing that aren't fixed quickly (swap page bodies to Yjs; the log design stays).
 
 ## 4. Topology: the Mac plus an optional hub
 
@@ -320,7 +330,7 @@ Building starts after Sprint's testing phase (5 Oct – 1 Nov 2026) and its UI/U
 
 | # | Spike | Proves | Go if | Fallback if no-go |
 |---|---|---|---|---|
-| S1 | **Sync core and simulation** | The event format, HLC, version-vector sync, the reducer with cardinality and tree-move rules, the sprint close as a deterministic event, Loro bodies | Over ≥ 10⁶ simulated runs (3–5 devices; drops, duplicates, reordering, partitions, crashes between append and fsync, ±1 day clock skew, two reducer versions): **zero lost acknowledged events**, byte-identical projections, invariants hold, rebuild from empty equals incremental, applying twice changes nothing. Replay of 1M events < 60 s on an M1; a week-late event applies in < 1 s | Design A for bulk data with the reducer only for edges; or Automerge instead of Loro |
+| S1 | **Sync core and simulation** | The event format, HLC, version-vector sync, the reducer with cardinality and tree-move rules, the sprint close as a deterministic event, Loro bodies | Over ≥ 10⁶ simulated runs (3–5 devices; drops, duplicates, reordering, partitions, crashes between append and fsync, ±1 day clock skew, two reducer versions): **zero lost acknowledged events**, byte-identical projections, invariants hold, rebuild from empty equals incremental, applying twice changes nothing. Replay of 1M events < 60 s on an M1; a week-late event applies in < 1 s | Design A for bulk data with the reducer only for edges; or Yjs instead of Loro for page bodies |
 | S2 | **Shell, editor and WebKit** | Tauri 2.12 + React 19 + Tiptap/BlockNote on loro-prosemirror, the document mirrored in the core over a binary channel; App Sandbox on | Cold start to an editable page < 1 s (target 600 ms); idle memory with the WebKit process < 150 MB with a 1,000-block page; typing p95 < 16 ms in a 10,000-block page; Polish, Ukrainian, Japanese and Chinese input with no doubled or dropped characters and no shortcut firing during composition; recovers after 20 min in the background under memory pressure; offline Mac + browser edits converge with block ids and mentions intact | Electron; or the Yjs path |
 | S3 | **Storage on a Mac** | Sprint's schema and integrity rules in SQLite; the benchmark rerun on Apple Silicon with rusqlite; encryption overhead; crash safety | At 100k objects: every interactive query < 50 ms p95 (most < 5 ms); a command commits < 5 ms p99 while a job writes 10k chunks; SQLCipher or SQLite3MultipleCiphers within +20% on hot queries; 1,000 `kill -9` runs with zero corruption and zero lost acknowledged commits | FileVault only, with encrypted backups |
 | S4 | **Rust core speed for one person** | Port the sprint engine, recurrences and time functions with their tests; generate TypeScript types | Ported with all of Sprint's tests passing in ≤ 1.5× the time a TypeScript port is estimated to take | Domain rules in TypeScript on Bun; storage, sync, crypto in Rust |
