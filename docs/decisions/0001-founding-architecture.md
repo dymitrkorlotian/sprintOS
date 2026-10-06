@@ -111,6 +111,7 @@ Research: [`research-storage.md`](../architecture/research-storage.md). Benchmar
 | PGlite 0.5.8 (Postgres 18 in wasm) | 2 | 3 | 2 | 4 | 4 | 5 | 3 |
 | Embedded native Postgres | 4 | 4 | 4 | 3 | 2 | 5 | 4 |
 | SurrealDB, CozoDB, Kùzu, Realm, a custom KV engine | – | – | 1–3 | – | – | – | – |
+| Minigraf 2.0.3 (embedded bi-temporal graph, Datalog) | – | 3 | 1 | 3 | 2 | 5 | 3 |
 
 Measured, p50 / p95 in ms:
 
@@ -129,6 +130,15 @@ Measured, p50 / p95 in ms:
 
 - **PGlite is rejected:** slowest on everything, about 0.9 s to open, and it runs with **`fsync=off`** (we checked `current_setting('fsync')` on 0.5.8; PGlite issue #1107), so an acknowledged write can be lost on a crash. Its 0.4 → 0.5 upgrade couldn't read old data files.
 - **An embedded Postgres is rejected:** a second process, 6 s recovery after an unclean stop, impossible on iOS (apps can't spawn processes) and in the browser.
+- **Minigraf is rejected as the store, for now** (2.0.3, checked 2026-10-06; suggested by the user). It's an embedded Rust graph database queried in Datalog, with bi-temporal facts, MIT/Apache, and bindings for Swift, Android and wasm.
+  - **No schema or constraints.** "Optional schema validation" is only on its roadmap, so every ontology rule (field types, relation ends, cardinality, no cycles) would be ours to write anyway.
+  - **A live data-integrity bug.** Two values of one attribute written in a single transaction can read back as one (its issue #371). The fix changes the file format and ships in v3.0.0.
+  - **One maintainer.** About 1,100 of roughly 1,110 commits are by one person (since 2023).
+  - **No full text, vectors, encryption or sync,** so SQLite would still be needed beside it.
+  - **Two ideas we take from it:**
+    - *Bi-temporal facts*: valid time (when it was true) as well as transaction time (when we learned it). The event log already gives transaction time; the schema adds valid time to relations and corrected values, so the graph can answer "what did we believe when the AI drafted that plan?" (section 3).
+    - *Datalog as a read-only query language* over the projection, for "Ask your OS" and future rules: small, recursive, and easy for a model to write correctly. It's a later option, not an M1 dependency.
+  - **We'd revisit it** once v3 ships the integrity fix and schema validation, and only if a spike shows Datalog over our graph earns its place.
 - **Full text:**
   - FTS5 with `unicode61 remove_diacritics 2`, titles weighted over bodies, plus a trigram index on titles for substring search (0.4 ms p95).
   - **`ł` isn't folded:** U+0142 has no Unicode decomposition. We checked on 3.53.4: `lodz` misses "Łódź", while `gesla` finds "gęślą". So the core writes a pre-folded search column (NFKD, marks stripped, `ł → l`) and folds queries the same way.
@@ -168,6 +178,7 @@ Measured, p50 / p95 in ms:
 - The editable ontology is data, so most product changes need no migration.
 
 **What would change it:**
+- Minigraf ships v3 with schema validation and the #371 fix, and a spike shows Datalog over the graph is worth a second engine.
 - Turso Database reaches 1.0 with stable concurrent writes and encryption. It reads the same files, so switching is cheap.
 - `vec1` or sqlite-vec ANN goes stable when users pass ~50k chunks.
 - A hosted product needs shared, many-writer workspaces. Then it's Postgres on the hosted hub and SQLite on devices.
